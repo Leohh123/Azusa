@@ -12,6 +12,9 @@ from audio import Audio
 from matplotlib import pyplot as plt
 
 
+debug = True
+
+
 def disable_scaling_for_high_resolution():
     # Query DPI Awareness (Windows 10 and 8)
     awareness = ctypes.c_int()
@@ -283,23 +286,24 @@ while run:
     #     for j in range(0, HEIGHT//100):
     #         pygame.draw.rect(screen, ['black', 'white']
     #                          [(i+j) % 2], [i*100, j*100, 100, 100])
-    white_keys, black_keys = draw_piano()
+    if not debug:
+        white_keys, black_keys = draw_piano()
 
-    def click_key(event: pygame.event.Event):
-        is_black_key = False
-        for i in range(len(black_keys)):
-            if black_keys[i].collidepoint(event.pos):
-                is_black_key = True
-                try_play_black(i, True)
-                break
-        if not is_black_key:
-            for i in range(len(white_keys)):
-                if white_keys[i].collidepoint(event.pos):
-                    try_play_white(i, True)
+        def click_key(event: pygame.event.Event):
+            is_black_key = False
+            for i in range(len(black_keys)):
+                if black_keys[i].collidepoint(event.pos):
+                    is_black_key = True
+                    try_play_black(i, True)
                     break
+            if not is_black_key:
+                for i in range(len(white_keys)):
+                    if white_keys[i].collidepoint(event.pos):
+                        try_play_white(i, True)
+                        break
 
-    draw_hands(right_oct, left_oct, right_hand, left_hand)
-    draw_title_bar()
+        draw_hands(right_oct, left_oct, right_hand, left_hand)
+        draw_title_bar()
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             run = False
@@ -369,10 +373,12 @@ while run:
             print(f'resize: {WIDTH=}, {HEIGHT=}')
 
     # print(len(fft.frames))
-    if len(fft.frames) > 100000:
-        plt.plot(fft.frames)
-        plt.show()
-        fft.frames = []
+    # if len(fft.frames) > 100000:
+    #     plt.plot(fft.frames)
+    #     plt.show()
+    #     fft.frames = []
+
+    fft.plot(screen)
 
     pygame.display.flip()
 

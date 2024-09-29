@@ -284,3 +284,144 @@
 # p = pyaudio.PyAudio()
 # for i in range(p.get_device_count()):
 #     print(p.get_device_info_by_index(i))
+
+
+# import threading
+
+# num = 0
+
+
+# def add():
+#     global num
+#     for i in range(10_000_000):
+#         tmp = num
+#         num = tmp + 1
+
+
+# def sub():
+#     global num
+#     for i in range(10_000_000):
+#         tmp = num
+#         num = tmp - 1
+
+
+# if __name__ == "__main__":
+#     subThread01 = threading.Thread(target=add)
+#     subThread02 = threading.Thread(target=sub)
+
+#     subThread01.start()
+#     subThread02.start()
+
+#     subThread01.join()
+#     subThread02.join()
+
+#     print("num result : %s" % num)
+
+# # 结果三次采集
+# # num result : 669214
+# # num result : -1849179
+# # num result : -525674
+
+
+# import pygame
+# import random
+
+# pygame.init()
+# W, H = 200, 200
+# screen = pygame.display.set_mode([W, H])
+
+# im = pygame.image.load('./2x2.png')
+# b = pygame.image.tobytes(im, 'RGB')
+# print(b, list(map(hex, b)))
+
+# ba = bytearray(b)
+
+# # im2 = pygame.image.frombytes(b, [2, 2], 'RGB')
+# im2 = pygame.image.frombuffer(ba, [2, 2], 'RGB')
+
+# timer = pygame.time.Clock()
+# while True:
+#     timer.tick(60)
+#     screen.fill('gray')
+#     im_scaled = pygame.transform.scale(im2, (W, H))
+#     screen.blit(im_scaled, [0, 0])
+#     # screen.blit(im2, [0, 0])
+#     for event in pygame.event.get():
+#         if event.type == pygame.QUIT:
+#             pygame.quit()
+#             exit()
+#         if event.type == pygame.KEYDOWN:
+#             if event.key == pygame.K_TAB:
+#                 while True:
+#                     try:
+#                         cmd = input('Eval: ')
+#                         if cmd.startswith('quit'):
+#                             break
+#                         print(eval(cmd))
+#                     except Exception as e:
+#                         print(e)
+#             if event.key == pygame.K_ESCAPE:
+#                 ba[:len(ba)] = random.randbytes(len(ba))
+#                 print(ba)
+
+#     pygame.display.flip()
+
+import wave
+import sys
+
+import pyaudio
+import numpy as np
+from matplotlib import pyplot as plt
+
+CHUNK = 1024
+
+if len(sys.argv) < 2:
+    print(f'Plays a wave file. Usage: {sys.argv[0]} filename.wav')
+    sys.exit(-1)
+
+with wave.open(sys.argv[1], 'rb') as wf:
+    # Instantiate PyAudio and initialize PortAudio system resources (1)
+    p = pyaudio.PyAudio()
+
+    # Open stream (2)
+    width = wf.getsampwidth()
+    channels = wf.getnchannels()
+    rate = wf.getframerate()
+    stream = p.open(format=p.get_format_from_width(width),
+                    channels=channels,
+                    rate=rate,
+                    output=True)
+
+    frames = []
+    # Play samples from the wave file (3)
+    while len(data := wf.readframes(CHUNK)):  # Requires Python 3.8+ for :=
+        # try:
+        stream.write(data)
+        # except KeyboardInterrupt:
+        d_all = np.fromstring(data, dtype=np.dtype(f'<i{width}'))
+        f = d_all[0::channels]
+        n: int = f.shape[0]
+        fhat = np.fft.fft(f)
+        freq = np.fft.fftfreq(n, d=1/rate)
+        mask = (freq > 0) & (freq <= 5000)
+        fhat = fhat[mask]
+        freq = freq[mask]
+        print(freq, freq.shape)
+        psd = (fhat * np.conj(fhat) / n).real
+        # plt.plot(freq, np.log(psd))
+        # plt.show()
+        # break
+        if len(frames) == 0 or frames[-1].shape[0] == psd.shape[0]:
+            frames.append(np.log(psd)/np.log(1e12))
+            print('append')
+    psd_all = np.vstack(frames)
+    plt.imshow(psd_all.T, cmap='grey', aspect='auto', vmin=0, vmax=1)
+    plt.colorbar()
+    plt.gca().invert_yaxis()
+    plt.show()
+
+    # Close stream (4)
+    stream.close()
+
+    # Release PortAudio system resources (5)
+    p.terminate()
