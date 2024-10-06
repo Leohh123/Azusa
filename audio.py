@@ -5,6 +5,9 @@ import wave
 class Audio:
     def __init__(self):
         self.mode = None
+        self.wf = None
+        self.stream = None
+        self.pa = None
 
     def record(self, process_fn):
         if self.mode is not None:
@@ -68,13 +71,18 @@ class Audio:
         match self.mode:
             case 'record':
                 # Close the stream (5)
-                self.stream.close()
+                if self.stream is not None:
+                    self.stream.close()
                 # Release PortAudio system resources (6)
-                self.pa.terminate()
+                if self.pa is not None:
+                    self.pa.terminate()
             case 'read':
                 # Close the stream (5)
-                self.stream.close()
+                if self.stream is not None:
+                    self.stream.close()
                 # Release PortAudio system resources (6)
-                self.pa.terminate()
+                if self.pa is not None:
+                    self.pa.terminate()
                 # Close audio file
-                self.wf.close()
+                if self.wf is not None:
+                    self.wf.close()

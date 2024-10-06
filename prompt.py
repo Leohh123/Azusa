@@ -15,3 +15,8 @@ def open_file():
 def info(msg):
     '''Create a info message box'''
     mb.showinfo('Message', msg)
+
+
+def dashboard():
+    top = tkinter.Tk()
+    top.mainloop()

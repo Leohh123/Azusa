@@ -1,18 +1,18 @@
 import pygame
 from pygame import mixer
 
+import time
 import ctypes
 import sys
 
-import common
+import common as cm
 import prompt
 from fft import FFT
 from audio import Audio
 
 from matplotlib import pyplot as plt
-
-
-debug = True
+from debug import debug
+import numpy as np
 
 
 def disable_scaling_for_high_resolution():
@@ -43,10 +43,10 @@ pygame.init()
 pygame.mixer.set_num_channels(50)
 
 screen = pygame.display.set_mode([0, 0], pygame.RESIZABLE)
-WIDTH, HEIGHT = screen.get_size()
+width, height = screen.get_size()
 
-title = 'Azusa \u0e05\u0028\u003d\uff65\u03c9\uff65\u003d\u0029\u0e05 nya~'
-pygame.display.set_caption(title)
+TITLE = 'Azusa \u0e05\u0028\u003d\uff65\u03c9\uff65\u003d\u0029\u0e05 nya~'
+pygame.display.set_caption(TITLE)
 
 disable_scaling_for_high_resolution()
 maximize_window()
@@ -54,183 +54,185 @@ maximize_window()
 
 def sz(x):
     '''Get size in pixels'''
-    result = round(x * WIDTH / (52 * 35))
+    result = max(1, round(x * width / (len(cm.WHITE_NOTES) * cm.WK_WIDTH)))
     return result
 
 
-font = pygame.font.Font('assets/Terserah.ttf', sz(72))
-medium_font = pygame.font.Font('assets/Terserah.ttf', sz(42))
-small_font = pygame.font.Font('assets/Terserah.ttf', sz(24))
-real_small_font = pygame.font.Font('assets/Terserah.ttf', sz(15))
+def get_font_by_height(path, height):
+    l, r = 8, 72
+    while r - l > 1:
+        m = (l + r) // 2
+        font = pygame.font.Font(path, m)
+        if font.get_height() <= height:
+            l = m
+        else:
+            r = m
+    return pygame.font.Font(path, l)
+
+
+fonts: dict[str, pygame.font.Font] = {}
+
+
+def load_fonts():
+    fonts['regular'] = get_font_by_height('assets/comic.ttf', sz(72))
+    fonts['medium'] = get_font_by_height('assets/comic.ttf', sz(42))
+    fonts['small'] = get_font_by_height('assets/comic.ttf', sz(24))
+    fonts['mini'] = get_font_by_height('assets/comic.ttf', sz(14))
+
+
+load_fonts()
+
 timer = pygame.time.Clock()
-fps = 60
+FPS = 60
 
 white_sounds: list[mixer.Sound] = []
 black_sounds: list[mixer.Sound] = []
-cnt_active_whites = [0 for _ in range(len(common.white_notes))]
-cnt_active_blacks = [0 for _ in range(len(common.black_notes))]
-left_oct = 4
-right_oct = 5
+white_last_times = []
+black_last_times = []
+cnt_active_whites = [0 for _ in range(len(cm.WHITE_NOTES))]
+cnt_active_blacks = [0 for _ in range(len(cm.BLACK_NOTES))]
+is_detected_whites = [False for _ in range(len(cm.WHITE_NOTES))]
+is_detected_blacks = [False for _ in range(len(cm.BLACK_NOTES))]
+left_oct = 3
+right_oct = 4
+white_keys: list[pygame.Rect] = []
+black_keys: list[pygame.Rect] = []
 
-left_hand = common.left_hand
-right_hand = common.right_hand
-white_notes = common.white_notes
-black_notes = common.black_notes
-black_labels = common.black_labels
 
-for i in range(len(white_notes)):
-    white_sounds.append(mixer.Sound(f'assets\\notes\\{white_notes[i]}.wav'))
+for i in range(len(cm.WHITE_NOTES)):
+    white_sounds.append(mixer.Sound(
+        f'assets\\notes\\{cm.WHITE_NOTES[i]}.wav'))
+    white_last_times.append(0.)
 
-for i in range(len(black_notes)):
-    black_sounds.append(mixer.Sound(f'assets\\notes\\{black_notes[i]}.wav'))
+for i in range(len(cm.BLACK_NOTES)):
+    black_sounds.append(mixer.Sound(
+        f'assets\\notes\\{cm.BLACK_NOTES[i]}.wav'))
+    black_last_times.append(0.)
+
+
+def gradient_vertical_rect(surf: pygame.Surface, top_color, bottom_color, rect_value, width=-1, border_color='black'):
+    rect_color = pygame.Surface((2, 2))
+    pygame.draw.line(rect_color, top_color, (0, 0), (1, 0))
+    pygame.draw.line(rect_color, bottom_color,  (0, 1), (1, 1))
+    rect_color = pygame.transform.smoothscale(
+        rect_color, rect_value[2:4])
+    surf.blit(rect_color, rect_value)
+    pygame.draw.rect(surf, border_color, rect_value, width)
+    return pygame.Rect(rect_value)
+
+
+def get_black_key_pos(i):
+    return i // 5 * 7 + i % 5 + (i % 5 + 1) // 2
 
 
 def draw_piano():
-    pygame.draw.rect(
-        screen, 'black',
-        [0, HEIGHT - sz(300), WIDTH, sz(300)],
-        0, sz(2))
-    white_rects = []
-    for i in range(52):
-        rect = pygame.draw.rect(
+    white_keys.clear()
+    black_keys.clear()
+    for i, label in enumerate(cm.WHITE_NOTES):
+        rect = gradient_vertical_rect(
             screen,
-            '#facc94' if cnt_active_whites[i] > 0 else '#f8f8f8',
-            [sz(i * 35), HEIGHT - sz(300), sz(35), sz(300)],
-            0, sz(2))
-        white_rects.append(rect)
-        pygame.draw.rect(
-            screen, 'black',
-            [sz(i * 35), HEIGHT - sz(300), sz(35), sz(300)],
-            sz(2), sz(2))
-        key_label = small_font.render(white_notes[i], True, 'black')
-        screen.blit(key_label, [sz(i * 35 + 3), HEIGHT - sz(20)])
-    skip_count = 0
-    last_skip = 2
-    skip_track = 2
-    black_rects = []
-    for i in range(36):
-        rect = pygame.draw.rect(
-            screen,
-            '#76c3ed' if cnt_active_blacks[i] > 0 else '#111111',
-            [sz(23 + (i * 35) + (skip_count * 35)),
-             HEIGHT - sz(300), sz(24), sz(200)],
-            0, sz(2))
-        key_label = real_small_font.render(black_labels[i], True, 'white')
+            cm.ORANGE_COLOR if is_detected_whites[i] else cm.WK_COLOR,
+            cm.ORANGE_COLOR if cnt_active_whites[i] > 0 else cm.WK_COLOR, [
+                sz(i * cm.WK_WIDTH),
+                height - sz(cm.WK_HEIGHT),
+                sz((i + 1) * cm.WK_WIDTH) - sz(i * cm.WK_WIDTH),
+                sz(cm.WK_HEIGHT)
+            ], sz(1)
+        )
+        white_keys.append(rect)
+        key_label = fonts['small'].render(label, True, 'black')
         screen.blit(
-            key_label,
-            [sz(25 + (i * 35) + (skip_count * 35)), HEIGHT - sz(120)])
-        black_rects.append(rect)
-        skip_track += 1
-        if last_skip == 2 and skip_track == 3:
-            last_skip = 3
-            skip_track = 0
-            skip_count += 1
-        elif last_skip == 3 and skip_track == 2:
-            last_skip = 2
-            skip_track = 0
-            skip_count += 1
-
-    return white_rects, black_rects
-
-
-def draw_hands(rightOct, leftOct, rightHand, leftHand):
-    # left hand
-    pygame.draw.rect(screen, 'dark gray', [
-                     sz((leftOct * 245) - 175), HEIGHT - sz(60), sz(245), sz(30)], 0, sz(4))
-    pygame.draw.rect(screen, 'black', [
-                     sz((leftOct * 245) - 175), HEIGHT - sz(60), sz(245), sz(30)], sz(4), sz(4))
-    text = small_font.render(leftHand[0], True, 'white')
-    screen.blit(text, [sz((leftOct * 245) - 165), HEIGHT - sz(55)])
-    text = small_font.render(leftHand[2], True, 'white')
-    screen.blit(text, [sz((leftOct * 245) - 130), HEIGHT - sz(55)])
-    text = small_font.render(leftHand[4], True, 'white')
-    screen.blit(text, [sz((leftOct * 245) - 95), HEIGHT - sz(55)])
-    text = small_font.render(leftHand[5], True, 'white')
-    screen.blit(text, [sz((leftOct * 245) - 60), HEIGHT - sz(55)])
-    text = small_font.render(leftHand[7], True, 'white')
-    screen.blit(text, [sz((leftOct * 245) - 25), HEIGHT - sz(55)])
-    text = small_font.render(leftHand[9], True, 'white')
-    screen.blit(text, [sz((leftOct * 245) + 10), HEIGHT - sz(55)])
-    text = small_font.render(leftHand[11], True, 'white')
-    screen.blit(text, [sz((leftOct * 245) + 45), HEIGHT - sz(55)])
-    text = small_font.render(leftHand[1], True, 'black')
-    screen.blit(text, [sz((leftOct * 245) - 148), HEIGHT - sz(55)])
-    text = small_font.render(leftHand[3], True, 'black')
-    screen.blit(text, [sz((leftOct * 245) - 113), HEIGHT - sz(55)])
-    text = small_font.render(leftHand[6], True, 'black')
-    screen.blit(text, [sz((leftOct * 245) - 43), HEIGHT - sz(55)])
-    text = small_font.render(leftHand[8], True, 'black')
-    screen.blit(text, [sz((leftOct * 245) - 8), HEIGHT - sz(55)])
-    text = small_font.render(leftHand[10], True, 'black')
-    screen.blit(text, [sz((leftOct * 245) + 27), HEIGHT - sz(55)])
-    # right hand
-    pygame.draw.rect(screen, 'dark gray', [
-                     sz((rightOct * 245) - 175), HEIGHT - sz(60), sz(245), sz(30)], 0, sz(4))
-    pygame.draw.rect(screen, 'black', [
-                     sz((rightOct * 245) - 175), HEIGHT - sz(60), sz(245), sz(30)], sz(4), sz(4))
-    text = small_font.render(rightHand[0], True, 'white')
-    screen.blit(text, [sz((rightOct * 245) - 165), HEIGHT - sz(55)])
-    text = small_font.render(rightHand[2], True, 'white')
-    screen.blit(text, [sz((rightOct * 245) - 130), HEIGHT - sz(55)])
-    text = small_font.render(rightHand[4], True, 'white')
-    screen.blit(text, [sz((rightOct * 245) - 95), HEIGHT - sz(55)])
-    text = small_font.render(rightHand[5], True, 'white')
-    screen.blit(text, [sz((rightOct * 245) - 60), HEIGHT - sz(55)])
-    text = small_font.render(rightHand[7], True, 'white')
-    screen.blit(text, [sz((rightOct * 245) - 25), HEIGHT - sz(55)])
-    text = small_font.render(rightHand[9], True, 'white')
-    screen.blit(text, [sz((rightOct * 245) + 10), HEIGHT - sz(55)])
-    text = small_font.render(rightHand[11], True, 'white')
-    screen.blit(text, [sz((rightOct * 245) + 45), HEIGHT - sz(55)])
-    text = small_font.render(rightHand[1], True, 'black')
-    screen.blit(text, [sz((rightOct * 245) - 148), HEIGHT - sz(55)])
-    text = small_font.render(rightHand[3], True, 'black')
-    screen.blit(text, [sz((rightOct * 245) - 113), HEIGHT - sz(55)])
-    text = small_font.render(rightHand[6], True, 'black')
-    screen.blit(text, [sz((rightOct * 245) - 43), HEIGHT - sz(55)])
-    text = small_font.render(rightHand[8], True, 'black')
-    screen.blit(text, [sz((rightOct * 245) - 8), HEIGHT - sz(55)])
-    text = small_font.render(rightHand[10], True, 'black')
-    screen.blit(text, [sz((rightOct * 245) + 27), HEIGHT - sz(55)])
+            key_label, [
+                sz((i + 0.5) * cm.WK_WIDTH) - key_label.get_width() // 2,
+                height - fonts['small'].get_height()
+            ]
+        )
+    for i, label in enumerate(cm.BLACK_NOTES):
+        pos = get_black_key_pos(i)
+        rect = gradient_vertical_rect(
+            screen,
+            cm.BLUE_COLOR if is_detected_blacks[i] else cm.BK_COLOR,
+            cm.BLUE_COLOR if cnt_active_blacks[i] > 0 else cm.BK_COLOR, [
+                sz((pos + 1) * cm.WK_WIDTH - cm.BK_WIDTH / 2),
+                height - sz(cm.WK_HEIGHT), sz(cm.BK_WIDTH), sz(cm.BK_HEIGHT)
+            ]
+        )
+        key_label = fonts['mini'].render(label, True, 'white')
+        screen.blit(
+            key_label, [
+                sz((pos + 1) * cm.WK_WIDTH) - key_label.get_width() // 2,
+                height - sz(cm.WK_HEIGHT - cm.BK_HEIGHT) -
+                fonts['mini'].get_height()
+            ]
+        )
+        black_keys.append(rect)
 
 
-def draw_title_bar():
-    instruction_text = medium_font.render(
-        'Up/Down Arrows Change Left Hand', True, 'black')
-    screen.blit(instruction_text, [WIDTH - sz(500), sz(10)])
-    instruction_text2 = medium_font.render(
-        'Left/Right Arrows Change Right Hand', True, 'black')
-    screen.blit(instruction_text2, [WIDTH - sz(500), sz(50)])
-    # img = pygame.transform.scale(
-    #     pygame.image.load('assets/logo.png'), [150, 150])
-    # screen.blit(img, (-20, -30))
-    # title_text = font.render('Python Programmable Piano!', True, 'white')
-    # screen.blit(title_text, (298, 18))
-    # title_text = font.render('Python Programmable Piano!', True, 'black')
-    # screen.blit(title_text, (300, 20))
+def draw_hands():
+    for hand, wk_cnt, num_oct, h_rate in [
+        [cm.LEFT_HAND, cm.LEFT_WK_CNT, left_oct, 0.15],
+        [cm.RIGHT_HAND, cm.RIGHT_WK_CNT, right_oct, 0.22]
+    ]:
+        bar_h_half = int(fonts['mini'].get_height() * 0.6)
+        pygame.draw.rect(
+            screen, 'dark gray', [
+                sz((num_oct * 7 + 2) * cm.WK_WIDTH),
+                height - sz(cm.WK_HEIGHT * h_rate) -
+                bar_h_half,
+                sz(wk_cnt * cm.WK_WIDTH),
+                bar_h_half * 2
+            ], 0, bar_h_half
+        )
+        for i, ch in enumerate(hand):
+            note = cm.ALL_NOTES[i + num_oct * 12 + 3]
+            if note[1] == 'b':
+                index = cm.BLACK_NOTES.index(note)
+                pos = get_black_key_pos(index)
+                text = fonts['mini'].render(ch, True, 'white')
+                screen.blit(text, [
+                    sz((pos + 1) * cm.WK_WIDTH) - text.get_width() // 2,
+                    height - sz(cm.WK_HEIGHT * h_rate) -
+                    fonts['mini'].get_height() // 2
+                ])
+            else:
+                index = cm.WHITE_NOTES.index(note)
+                text = fonts['mini'].render(ch, True, 'black')
+                screen.blit(text, [
+                    sz((index + 0.5) * cm.WK_WIDTH) - text.get_width() // 2,
+                    height - sz(cm.WK_HEIGHT * h_rate) -
+                    fonts['mini'].get_height() // 2
+                ])
 
 
 run = True
 is_mouse_down = False
-is_sustain = False
 mouse_black_index = None
 mouse_white_index = None
+
+
+def try_stop_black(index: int):
+    cnt_active_blacks[index] -= 1
+
+
+def try_stop_white(index: int):
+    cnt_active_whites[index] -= 1
 
 
 def resume_cnt_for_mouse():
     global mouse_black_index, mouse_white_index
     if mouse_black_index is not None:
-        cnt_active_blacks[mouse_black_index] -= 1
+        try_stop_black(mouse_black_index)
         mouse_black_index = None
     if mouse_white_index is not None:
-        cnt_active_whites[mouse_white_index] -= 1
+        try_stop_white(mouse_white_index)
         mouse_white_index = None
 
 
 def try_play_black(index: int, is_mouse=False):
     global mouse_black_index
     if cnt_active_blacks[index] == 0:
-        black_sounds[index].play(0, 0 if is_sustain else 1000)
+        black_sounds[index].play()
+        black_last_times[index] = time.time()
     if is_mouse:
         resume_cnt_for_mouse()
         mouse_black_index = index
@@ -240,147 +242,224 @@ def try_play_black(index: int, is_mouse=False):
 def try_play_white(index: int, is_mouse=False):
     global mouse_white_index
     if cnt_active_whites[index] == 0:
-        white_sounds[index].play(0, 0 if is_sustain else 1000)
+        white_sounds[index].play()
+        white_last_times[index] = time.time()
     if is_mouse:
         resume_cnt_for_mouse()
         mouse_white_index = index
     cnt_active_whites[index] += 1
 
 
+def check_keys_stop():
+    now = time.time()
+    for i, sound in enumerate(white_sounds):
+        if cnt_active_whites[i] == 0 and \
+                now - white_last_times[i] > 0.25:
+            sound.fadeout(100)
+    for i, sound in enumerate(black_sounds):
+        if cnt_active_blacks[i] == 0 and \
+                now - black_last_times[i] > 0.25:
+            sound.fadeout(100)
+
+
+note_on_psd = None
+
+
+def click_key(event: pygame.event.Event):
+    if note_on_psd is None:
+        is_black_key = False
+        for i in range(len(black_keys)):
+            if black_keys[i].collidepoint(event.pos):
+                is_black_key = True
+                try_play_black(i, True)
+                break
+        if not is_black_key:
+            for i in range(len(white_keys)):
+                if white_keys[i].collidepoint(event.pos):
+                    try_play_white(i, True)
+                    break
+    else:
+        if note_on_psd[1] == 'b':
+            index = cm.BLACK_NOTES.index(note_on_psd)
+            try_play_black(index, True)
+        else:
+            index = cm.WHITE_NOTES.index(note_on_psd)
+            try_play_white(index, True)
+
+
 audio = Audio()
 fft = FFT()
 
-while run:
-    left_dict = {
-        'Z': f'C{left_oct}',
-        'S': f'C#{left_oct}',
-        'X': f'D{left_oct}',
-        'D': f'D#{left_oct}',
-        'C': f'E{left_oct}',
-        'V': f'F{left_oct}',
-        'G': f'F#{left_oct}',
-        'B': f'G{left_oct}',
-        'H': f'G#{left_oct}',
-        'N': f'A{left_oct}',
-        'J': f'A#{left_oct}',
-        'M': f'B{left_oct}',
-    }
-    right_dict = {
-        'R': f'C{right_oct}',
-        '5': f'C#{right_oct}',
-        'T': f'D{right_oct}',
-        '6': f'D#{right_oct}',
-        'Y': f'E{right_oct}',
-        'U': f'F{right_oct}',
-        '8': f'F#{right_oct}',
-        'I': f'G{right_oct}',
-        '9': f'G#{right_oct}',
-        'O': f'A{right_oct}',
-        '0': f'A#{right_oct}',
-        'P': f'B{right_oct}'
-    }
+audio.record(fft.process)
 
-    timer.tick(fps)
+
+def draw_line_on_psd(rect: pygame.Rect, index_note: int):
+    f = cm.ALL_FREQS[index_note]
+    i_freq = np.argmin(np.abs(fft.freq - f))
+    y_freq = rect.bottom - (i_freq * rect.height // fft.freq.shape[0])
+    # print(i_freq, fft.freq[i_freq], rect.bottom,
+    #       y_freq, fft.freq.shape, pygame.mouse.get_pos())
+    pygame.draw.line(
+        screen, 'blue',
+        [rect.left, y_freq], [rect.right, y_freq])
+    text = fonts['mini'].render(cm.ALL_NOTES[index_note], True, 'blue')
+    screen.blit(
+        text, [
+            rect.right - text.get_width(),
+            y_freq - text.get_height()
+        ]
+    )
+
+
+def draw_psd():
+    global note_on_psd
+    if fft.image is not None:
+        with fft.lock_image:
+            im_rotated = pygame.transform.rotate(fft.image, 90)
+        im_scaled = pygame.transform.smoothscale(
+            im_rotated, [screen.get_width(), 600])
+        rect = screen.blit(im_scaled, [0, 0])
+        # draw_line_at_frequency(440., rect)
+        x, y = pygame.mouse.get_pos()
+        if rect.collidepoint(x, y):
+            i_mouse = np.clip(
+                (rect.bottom - y) * fft.freq.shape[0] // rect.height,
+                0, fft.freq.shape[0] - 1)
+            f_mouse = fft.freq[i_mouse]
+            ni_close = np.argmin(np.abs(cm.ALL_FREQS - f_mouse))
+            draw_line_on_psd(rect, ni_close)
+            note_on_psd = cm.ALL_NOTES[ni_close]
+        else:
+            note_on_psd = None
+
+
+def update_detect_status():
+    if fft.spl is None:
+        return
+    global is_detected_whites, is_detected_blacks
+    is_detected_whites = [False for _ in range(len(cm.WHITE_NOTES))]
+    is_detected_blacks = [False for _ in range(len(cm.BLACK_NOTES))]
+    for note, freq in cm.NOTE2FREQ.items():
+        i_freq = np.argmin(np.abs(fft.freq - freq))
+        val = fft.spl[i_freq]
+        if val > fft.db_range[0]:
+            if note[1] == 'b':
+                index = cm.BLACK_NOTES.index(note)
+                is_detected_blacks[index] = True
+            else:
+                index = cm.WHITE_NOTES.index(note)
+                is_detected_whites[index] = True
+
+
+while run:
+    timer.tick(FPS)
     screen.fill('gray')
-    # for i in range(0, WIDTH//100):
-    #     for j in range(0, HEIGHT//100):
+    # for i in range(0, width//100+1):
+    #     for j in range(0, height//100+1):
     #         pygame.draw.rect(screen, ['black', 'white']
     #                          [(i+j) % 2], [i*100, j*100, 100, 100])
     if not debug:
-        white_keys, black_keys = draw_piano()
-
-        def click_key(event: pygame.event.Event):
-            is_black_key = False
-            for i in range(len(black_keys)):
-                if black_keys[i].collidepoint(event.pos):
-                    is_black_key = True
-                    try_play_black(i, True)
-                    break
-            if not is_black_key:
-                for i in range(len(white_keys)):
-                    if white_keys[i].collidepoint(event.pos):
-                        try_play_white(i, True)
-                        break
-
-        draw_hands(right_oct, left_oct, right_hand, left_hand)
-        draw_title_bar()
+        draw_piano()
+        draw_hands()
+    draw_psd()
+    update_detect_status()
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             run = False
         if event.type == pygame.MOUSEBUTTONDOWN:
-            print('mouse down')
             is_mouse_down = True
             click_key(event)
         if event.type == pygame.MOUSEBUTTONUP:
-            print('mouse up')
             is_mouse_down = False
             resume_cnt_for_mouse()
         if event.type == pygame.MOUSEMOTION:
             if is_mouse_down:
                 click_key(event)
         if event.type == pygame.KEYDOWN:
-            key_name = pygame.key.name(event.key).upper()
-            if key_name in left_dict:
-                if left_dict[key_name][1] == '#':
-                    index = black_labels.index(left_dict[key_name])
+            key_name = pygame.key.name(event.key)
+            if key_name in cm.LEFT_HAND:
+                index_all = cm.LEFT_HAND.index(key_name) + left_oct * 12 + 3
+                note = cm.ALL_NOTES[index_all]
+                if note[1] == 'b':
+                    index = cm.BLACK_NOTES.index(note)
                     try_play_black(index)
                 else:
-                    index = white_notes.index(left_dict[key_name])
+                    index = cm.WHITE_NOTES.index(note)
                     try_play_white(index)
-            elif key_name in right_dict:
-                if right_dict[key_name][1] == '#':
-                    index = black_labels.index(right_dict[key_name])
+            elif key_name in cm.RIGHT_HAND:
+                index_all = cm.RIGHT_HAND.index(key_name) + right_oct * 12 + 3
+                note = cm.ALL_NOTES[index_all]
+                if note[1] == 'b':
+                    index = cm.BLACK_NOTES.index(note)
                     try_play_black(index)
                 else:
-                    index = white_notes.index(right_dict[key_name])
+                    index = cm.WHITE_NOTES.index(note)
                     try_play_white(index)
-            elif event.key == pygame.K_RIGHT and right_oct < 8:
+            elif event.key == pygame.K_PAGEUP and right_oct < 8:
                 right_oct += 1
-            elif event.key == pygame.K_LEFT and right_oct > 0:
+            elif event.key == pygame.K_PAGEDOWN and right_oct > 0:
                 right_oct -= 1
-            elif event.key == pygame.K_UP and left_oct < 8:
+            elif event.key == pygame.K_HOME and left_oct < 8:
                 left_oct += 1
-            elif event.key == pygame.K_DOWN and left_oct > 0:
+            elif event.key == pygame.K_END and left_oct > 0:
                 left_oct -= 1
 
         if event.type == pygame.KEYUP:
-            key_name = pygame.key.name(event.key).upper()
-            if key_name in left_dict:
-                if left_dict[key_name][1] == '#':
-                    index = black_labels.index(left_dict[key_name])
-                    cnt_active_blacks[index] -= 1
+            key_name = pygame.key.name(event.key)
+            if key_name in cm.LEFT_HAND:
+                index_all = cm.LEFT_HAND.index(key_name) + left_oct * 12 + 3
+                note = cm.ALL_NOTES[index_all]
+                if note[1] == 'b':
+                    index = cm.BLACK_NOTES.index(note)
+                    try_stop_black(index)
                 else:
-                    index = white_notes.index(left_dict[key_name])
-                    cnt_active_whites[index] -= 1
-            elif key_name in right_dict:
-                if right_dict[key_name][1] == '#':
-                    index = black_labels.index(right_dict[key_name])
-                    cnt_active_blacks[index] -= 1
+                    index = cm.WHITE_NOTES.index(note)
+                    try_stop_white(index)
+            elif key_name in cm.RIGHT_HAND:
+                index_all = cm.RIGHT_HAND.index(key_name) + right_oct * 12 + 3
+                note = cm.ALL_NOTES[index_all]
+                if note[1] == 'b':
+                    index = cm.BLACK_NOTES.index(note)
+                    try_stop_black(index)
                 else:
-                    index = white_notes.index(right_dict[key_name])
-                    cnt_active_whites[index] -= 1
-            elif event.key == pygame.K_F1:
+                    index = cm.WHITE_NOTES.index(note)
+                    try_stop_white(index)
+            if event.key == pygame.K_F1:
                 filename = prompt.open_file()
                 try:
+                    fft.clear_window()
                     audio.read(filename, fft.process)
                 except Exception as e:
                     prompt.info(str(e))
             elif event.key == pygame.K_F2:
+                fft.clear_window()
                 audio.record(fft.process)
+            elif event.key == pygame.K_F3:
+                # prompt.dashboard()
+                try:
+                    thresh_psd = float(input('thresh_psd: '))
+                except:
+                    pass
+            elif event.key == pygame.K_F4:
+                # prompt.dashboard()
+                try:
+                    fft.db_range[0] = float(input('max_psd: '))
+                except:
+                    pass
+            elif event.key == pygame.K_F11:
+                fft.set_channel(0)
+            elif event.key == pygame.K_F12:
+                fft.set_channel(1)
 
         if event.type == pygame.VIDEORESIZE:
-            WIDTH, HEIGHT = screen.get_size()
-            print(f'resize: {WIDTH=}, {HEIGHT=}')
+            width, height = screen.get_size()
+            print(f'resize: {width=}, {height=}')
+            load_fonts()
 
-    # print(len(fft.frames))
-    # if len(fft.frames) > 100000:
-    #     plt.plot(fft.frames)
-    #     plt.show()
-    #     fft.frames = []
-
-    fft.plot(screen)
+    check_keys_stop()
 
     pygame.display.flip()
+
 
 pygame.quit()
 audio.close()
